@@ -93,10 +93,38 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
                 {
                     //check where we stopped
                     ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
-                    regs.rip--;
+                    printf("the byte before rip is : %hhx\n" ,(char)(regs.rip-1));
+                    if ((char)(regs.rip-1)==0xcc){
+                        //meaning we stopped because of int 3
+                        regs.rip--;
+                    }
                     long inst = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip, NULL);
                     printf("rip is now : %0llx\n",regs.rip);
-                    printf("inst is : %0lx\n", inst);
+                    printf("inst is : %0x\n", (short)inst);
+                    if (getRip(debugged_pid) == (void*)return_to_rip)
+                    {
+                        printf("got here\n");
+                        //check if we're just out of the function
+                        ptrace(PTRACE_GETREGS, debugged_pid,NULL,&regs);
+                        if (rsp==(void*)(regs.rsp+8)){
+                            printf("got here??\n");
+                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_ret);
+                            break;
+                        }
+                        else{ //we landed on return_to_rip but havn't gotten out of the function yet 
+                            inst =ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_ret);
+                            printf("this is inst : %0x\n",(int)inst);
+                            if ((short)inst==0x05cc){
+                                printf("this is syscall!!\n");
+                            }
+                            ptrace(PTRACE_SINGLESTEP, debugged_pid, NULL, NULL);
+                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_trap);
+                            ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
+                            waitpid(debugged_pid,&wait_status,0);
+                            continue;
+                        }
+                                                
+                    }
                     if (inst == SYSCALL_OPCODE)
                     {
                         // stopped at syscall
@@ -121,23 +149,6 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
                         continue;
                     }
                     */
-                    if (getRip(debugged_pid) == (void*)return_to_rip)
-                    {
-                        //check if we're just out of the function
-                        ptrace(PTRACE_GETREGS, debugged_pid,NULL,&regs);
-                        if (rsp==(void*)regs.rsp){
-                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_ret);
-                            break;
-                        }
-                        else{ //we landed on return_to_rip but havn't gotten out of the function yet 
-                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_ret);
-                            ptrace(PTRACE_SINGLESTEP, debugged_pid, NULL, NULL);
-                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_trap);
-                            ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                            waitpid(debugged_pid,&wait_status,0);
-                        }
-                                                
-                    }
                     else
                     {
                         //stopped for other unknown reason. might be a user breakpoint or some interupt
