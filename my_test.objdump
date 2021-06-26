@@ -1,0 +1,34 @@
+
+my_test.out:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000400078 <foo>:
+  400078:	48 c7 c0 02 00 00 00 	mov    $0x2,%rax
+  40007f:	48 c7 c7 dd 00 60 00 	mov    $0x6000dd,%rdi
+  400086:	48 c7 c6 00 00 00 00 	mov    $0x0,%rsi
+  40008d:	eb 2b                	jmp    4000ba <outer_syscall>
+
+000000000040008f <rett>:
+  40008f:	49 ff cd             	dec    %r13
+  400092:	48 c7 c0 02 00 00 00 	mov    $0x2,%rax
+  400099:	48 c7 c7 dd 00 60 00 	mov    $0x6000dd,%rdi
+  4000a0:	48 c7 c6 00 00 00 00 	mov    $0x0,%rsi
+  4000a7:	41 55                	push   %r13
+  4000a9:	0f 05                	syscall 
+  4000ab:	41 5d                	pop    %r13
+  4000ad:	c3                   	retq   
+
+00000000004000ae <_start>:
+  4000ae:	49 c7 c5 01 00 00 00 	mov    $0x1,%r13
+  4000b5:	e8 be ff ff ff       	callq  400078 <foo>
+
+00000000004000ba <outer_syscall>:
+  4000ba:	0f 05                	syscall 
+  4000bc:	49 83 fd 00          	cmp    $0x0,%r13
+  4000c0:	75 cd                	jne    40008f <rett>
+  4000c2:	48 c7 c0 3c 00 00 00 	mov    $0x3c,%rax
+  4000c9:	48 c7 c7 00 00 00 00 	mov    $0x0,%rdi
+  4000d0:	0f 05                	syscall 
+  4000d2:	48 31 c0             	xor    %rax,%rax

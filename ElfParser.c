@@ -7,9 +7,11 @@
 ParsedElf *parse(const char *path_to_elf, const char *target_func_name)
 {
     ParsedElf *parsed = malloc(sizeof(ParsedElf));
+    parsed->found_symbol=0;
     parse_elf_header(parsed, path_to_elf);
     parse_section_headers(parsed, path_to_elf);
     parse_symbol_entry(parsed, path_to_elf, target_func_name);
+    get_func_adress(parsed);
     return parsed;
 }
 
@@ -29,7 +31,7 @@ void parse_elf_header(ParsedElf *parsedElf, const char *path_to_elf)
         return;
     }
     (*parsedElf).header = header;
-    fclose(file); 
+    fclose(file);
 }
 
 void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
@@ -82,11 +84,10 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
         i++;
     } while (strcmp(get_section_name(parsedElf, path_to_elf, string_header), ".strtab") && i < parsedElf->header->e_shnum);
 
-
     (*parsedElf).text_header = text_header;
     (*parsedElf).symtab_header = symtab_header;
     (*parsedElf).string_header = string_header;
-    fclose(file); 
+    fclose(file);
 }
 
 void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const char *target_func_name)
@@ -97,7 +98,7 @@ void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const cha
         fprintf(stderr, "Failed opening the following file : '%s'\n", path_to_elf);
         return;
     }
-    int num_of_symbols= parsedElf->symtab_header->sh_size / sizeof(Elf64_Sym);
+    int num_of_symbols = parsedElf->symtab_header->sh_size / sizeof(Elf64_Sym);
     int i = 0;
     Elf64_Sym *symbol = malloc(sizeof(Elf64_Sym));
     fseek(file, parsedElf->symtab_header->sh_offset, SEEK_SET);
@@ -112,47 +113,66 @@ void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const cha
         i++;
     } while (strcmp(get_symbol_name(parsedElf, path_to_elf, symbol), target_func_name) && i < num_of_symbols);
 
+    if (!strcmp(get_symbol_name(parsedElf, path_to_elf, symbol), target_func_name))
+    {
+        parsedElf->found_symbol = 1;
+    }
     (*parsedElf).target_func = symbol;
-    fclose(file); 
+    fclose(file);
 }
 
-char* get_symbol_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Sym *symbol) {
+char *get_symbol_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Sym *symbol)
+{
     char temp[100];
     FILE *file = fopen(path_to_elf, "rb");
     fseek(file, parsed->string_header->sh_offset + symbol->st_name, SEEK_SET);
     char ch;
     int i = 0;
-    do {
+    do
+    {
         ch = fgetc(file);
         temp[i] = ch;
         i++;
-    } while( i < 100);
-    char *name = malloc((i+1)*sizeof(char));
+    } while (i < 100);
+    char *name = malloc((i + 1) * sizeof(char));
     strcpy(name, temp);
     fclose(file);
     return name;
 }
 
+void *get_func_adress(ParsedElf *parsed)
+{
+    void *address = (void *)parsed->target_func->st_value;
+    parsed->br_address = address;
+    return address;
+}
 
-char* get_section_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Shdr *section) {
+char *get_section_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Shdr *section)
+{
     char temp[100];
     FILE *file = fopen(path_to_elf, "rb");
-    fseek(file, (*parsed).header->e_shoff + sizeof(Elf64_Shdr)*((*parsed).header->e_shstrndx), SEEK_SET);
+    fseek(file, (*parsed).header->e_shoff + sizeof(Elf64_Shdr) * ((*parsed).header->e_shstrndx), SEEK_SET);
     Elf64_Shdr *shstrndx = malloc(sizeof(Elf64_Shdr));
     int read_res = fread(shstrndx, sizeof(Elf64_Shdr), 1, file);
     fseek(file, shstrndx->sh_offset + section->sh_name, SEEK_SET);
     char ch;
     int i = 0;
-    do {
+    do
+    {
         ch = fgetc(file);
         temp[i] = ch;
         i++;
-    } while( ch != '\0' && i < 100);
-    char *name = malloc((i+1)*sizeof(char));
+    } while (ch != '\0' && i < 100);
+    char *name = malloc((i + 1) * sizeof(char));
     strcpy(name, temp);
     fclose(file);
-    free (shstrndx);
+    free(shstrndx);
     return name;
+}
+
+int get_func_bind_prop(ParsedElf *parsed)
+{
+    return ELF64_ST_BIND(parsed->target_func->st_info);
 }
 
 void destroy(ParsedElf *parsed)
