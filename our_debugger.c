@@ -5,8 +5,10 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/user.h>
 
 #include "elf64.h"
+#include "ElfParser.h"
 // Ptace
 // include ./parser
 
@@ -41,6 +43,7 @@ pid_t execute_program(const char* exec_file){
 void run_syscall_fix_debugger(pid_t debugged_pid, void* func_addr){
     int wait_status;
     waitpid(debugged_pid,&wait_status,NULL);
+    struct user_regs_struct regs;
     while (WIFSTOPPED(wait_status)){
         int call_balance=0;
         // backup original command
@@ -59,12 +62,38 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void* func_addr){
             waitpid(debugged_pid,&wait_status,NULL);
             while (WIFSTOPPED(wait_status)){
                 if (!is_inside_func()){
+
                     break;
                 }
-                else{
-                    do_da_thing();
-                }
+                if (stopped_at_call()){
+                    call_balance++;
+                    ptrace(PTRACE_SYSCALL,debugged_pid,NULL,NULL);
+                    waitpid(debugged_pid,&wait_status,NULL);
 
+                }
+                if (stopped_at_ret()){
+                    if (call_balance==0){
+                        ptrace(PTRACE_SYSCALL,debugged_pid,NULL,NULL);
+                        waitpid(debugged_pid,&wait_status,NULL);
+                        break;
+                    }
+                    call_balance--;
+                    ptrace(PTRACE_SYSCALL,debugged_pid,NULL,NULL);
+                    waitpid(debugged_pid,&wait_status,NULL);
+                }
+                else{ // stopped at syscall
+                    // do_da_thing(); // get the regs print "PRF::syscall in <hex syscall address> returned with <decimal return value>"
+                    ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
+                    unsigned long long int syscall_rip = regs.rip;
+
+                    ptrace(PTRACE_SINGLESTEP,debugged_pid,0,0);
+                    ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
+
+                    unsigned long long int syscall_return_val = regs.rax;
+                    printf("PRF::syscall in %p returned with %llu\n", syscall_rip,syscall_return_val);
+                    ptrace(PTRACE_SYSCALL,debugged_pid,NULL,NULL);
+                    waitpid(debugged_pid,&wait_status,NULL);
+                }
             }
 
         }
@@ -76,7 +105,12 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void* func_addr){
 int main(int argc,char *argv[]){
     const char* func_name = argv[1];
     const char* program_to_debug = argv[2];
+    ParsedElf* parsed_elf= parse(program_to_debug,func_name); 
     void* func_addr=elf_parser(program_to_debug,func_name);
+    if (func_addr==NULL){
+        printf("PRF::not found!\n");
+        return 0;
+    }
     pid_t debugged_pid = execute_program(program_to_debug);
     run_syscall_fix_debugger(debugged_pid, func_addr);
     return 0;
