@@ -1,0 +1,2 @@
+gcc -std=c99 *.c
+./prf foo my_test.out 

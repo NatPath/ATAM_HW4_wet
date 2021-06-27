@@ -11,7 +11,8 @@
 #include "elf64.h"
 #include "ElfParser.h"
 
-#define SYSCALL_OPCODE 0x050f
+#define SYSCALL_OPC_V1 0x0F05
+#define SYSCALL_OPC_V2 0X050F
 // Ptace
 // include ./parser
 
@@ -69,16 +70,27 @@ void insert_breakpoint_at_target_function(void *func_addr, pid_t debugged_pid, l
 long insert_breakpoint_at_ret_inst(void *func_addr, pid_t debugged_pid, void **rsp, long* data_ret) {
     struct user_regs_struct regs;
     ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
-    rsp = (void*)regs.rsp;
-    long return_to_rip = ptrace(PTRACE_PEEKDATA, debugged_pid, rsp, NULL);
+    *rsp = (void*)regs.rsp;
+    long return_to_rip = ptrace(PTRACE_PEEKDATA, debugged_pid, *rsp, NULL);
     *data_ret = ptrace(PTRACE_PEEKTEXT, debugged_pid, return_to_rip, NULL);
     unsigned long data_trap = generate_br_INT_3(*data_ret);
     ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, (void *)data_trap);  
     return return_to_rip;  
 }
+// is inst a syscall
+bool is_syscall(unsigned short inst){
+    return (inst == SYSCALL_OPC_V1 || inst == SYSCALL_OPC_V2);
+}
+bool was_the_last_instruction_syscall(pid_t pid){
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS,pid,0,&regs);
+    long instr= ptrace(PTRACE_PEEKDATA,pid,regs.rip-2,0);
+    return is_syscall((unsigned short)instr);
+}
 
-bool is_br_whitelisted(void* rip, void* ret_address,unsigned short instr) {
-     return instr == SYSCALL_OPCODE || rip == ret_address; 
+//gets intrustion of 2 bytes before to check if it is a syscall
+bool is_br_whitelisted(void* rip, void* ret_address,pid_t pid) {
+     return was_the_last_instruction_syscall(pid) || rip == ret_address; 
 }
 
 void rip_decrease(pid_t debugged_pid){
@@ -106,7 +118,7 @@ void debug(int i, pid_t pid) {
     printf("-----%d-----\n", i);
     printf("RIP = %p\n", (void*)regs.rip);
     printf("INSTRUCTION = 0x%lx\n", instr);
-
+    printf("RDI = 0x%llx\n", regs.rdi);
 } 
 
 void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, void* rsp,long data,long data_ret){
@@ -133,39 +145,38 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
         i++;
         //printf("entered the loop for the %dth time\n",i+1);
         ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
-        current_rip= (void*)(regs.rip-1);
-        current_rsp= (void*)regs.rsp;
+        current_rip = (void*)(regs.rip-1);
+        current_rsp = (void*)regs.rsp;
         current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
         shortened_instruction=(unsigned short)current_instruction;
         debug(i,debugged_pid);
-        if (is_br_whitelisted(current_rip, ret_address,shortened_instruction)) {
+        if (is_br_whitelisted(current_rip, ret_address,debugged_pid)) {
+            printf("iteration %d got into whitelisted\n",i);
             if (current_rip == ret_address) {
-                if(current_rsp == rsp+8 ) {// true = we're out
+            
+                if(current_rsp == rsp + 8) {// true = we're out
+                    printf("do you ever get here?\n"); 
+                    ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
                     return;
                 }
                 else { //we are in
-                    printf("we're still in\n");
-                    //1. reinject original ret_instr
                     ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
-                    //2. exec instr
-                    //3. print shit if syscall
-                    //check_if_syscall();
                     rip_decrease(debugged_pid);
-                    printf("data_ret is : %04x\n",(unsigned short)data_ret);
-                    if ((unsigned short)data_ret == SYSCALL_OPCODE || (unsigned short)data_ret == 0x0f05){
-                        ptrace(PTRACE_SINGLESTEP, debugged_pid ,0 ,0);
+                    if(is_syscall((unsigned short)data_ret)){
+                        ptrace(PTRACE_SINGLESTEP,debugged_pid,0,0);
                         waitpid(debugged_pid, &wait_status, 0);
                         handle_syscall(debugged_pid);
                     }
-                    //4. reinject br
-                    debug(i, debugged_pid);
-                    printf("trap: %lu", data_trap);
-                    ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_trap);
-                    debug(i,debugged_pid);
+                    ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_ret_trap);
                 }
             } else { // we're in -> MUST BE A SYSCALL
+                    if (!was_the_last_instruction_syscall(debugged_pid)){
+                        //sanity check
+                        printf("if you got here you fucked up\n");
+                    }
                     //1. exec instr
-                    ptrace(PTRACE_SINGLESTEP, debugged_pid, 0, 0); //do the syscall
+                    ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
+                    waitpid(debugged_pid, &wait_status, 0);
                     handle_syscall(debugged_pid);
             }
         }
@@ -181,16 +192,34 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
     void *rsp;
     long data; // backup of the first command of func (overwritten by int 3)
     long data_ret; // backup of the next command after func call (overwritten by int 3)
+    int i=0;
 
     waitpid(debugged_pid, &wait_status, 0);
-    while(WIFSTOPPED(wait_status)){
+    while(WIFSTOPPED(wait_status) && !(WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
+        printf("IS EXITED %d\n", WIFEXITED(wait_status));
+        i++;
         insert_breakpoint_at_target_function(func_addr, debugged_pid, &data);
         ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
-        waitpid(debugged_pid, &wait_status, 0);
-        if (WIFSTOPPED(wait_status)) {
+        //int wait_ret_value=waitpid(debugged_pid, &wait_status, 0);
+        /*
+        printf("wait_ret_value is %d",wait_ret_value);
+        if( wait_ret_value<0){
+            printf("OUT\n");
+            break;
+        }
+        */
+        wait(&wait_status);
+        if (WIFEXITED(wait_status)){
+            printf("SHALOM AL ISRAEL");
+            break;
+        }
+        if (!WIFEXITED(wait_status) && WIFSTOPPED(wait_status)) {
+            debug(1337,debugged_pid);
+            printf("how many loops! this many loops %d\n",i);
             if(func_addr == getRip(debugged_pid)) {
                 printf("Entered the function\n");
                 long ret_address = insert_breakpoint_at_ret_inst(func_addr, debugged_pid, &rsp, &data_ret);
+                printf("HERE IS YOUR MOTHEFUCKING ORIGNIAL RSP: 0x%p\n", rsp);
                 track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret);
             }
         }  
@@ -359,5 +388,6 @@ int main(int argc, char *argv[])
         void *func_addr = parsed_elf->br_address;
         run_syscall_fix_debugger(debugged_pid, func_addr);
     }
+    destroy(parsed_elf);
     return 0;
 }
