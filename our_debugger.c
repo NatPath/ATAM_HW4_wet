@@ -26,7 +26,7 @@
 4    
 */
 
-pid_t execute_program(const char *exec_file)
+pid_t execute_program(const char *exec_file,char* argv[])
 {
     int pid = fork();
     if (pid > 0)
@@ -40,7 +40,7 @@ pid_t execute_program(const char *exec_file)
             perror("ptrace");
             exit(1);
         }
-        execl(exec_file, exec_file);
+        execv(exec_file, argv);
     }
     else
     {
@@ -107,8 +107,9 @@ void handle_syscall(pid_t debugged_pid){
     ptrace(PTRACE_GETREGS, debugged_pid, 0, &regs);
     syscall_return_val = regs.rax;
     syscall_rip = (void*)(regs.rip-2);
-    printf("PRF::syscall in %p returned with %ld\n", syscall_rip, syscall_return_val);
-
+    if (syscall_return_val < 0) {
+        printf("PRF:: syscall in %llx returned with %ld\n", (long long unsigned int)syscall_rip, syscall_return_val);
+    }
 }
 
 void debug(int i, pid_t pid) {
@@ -141,7 +142,7 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
     ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
     waitpid(debugged_pid, &wait_status, 0);
     int i = 0;
-    while(WIFSTOPPED(wait_status)){
+    while(WIFSTOPPED(wait_status) && !(WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
         i++;
         //printf("entered the loop for the %dth time\n",i+1);
         ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
@@ -149,10 +150,13 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
         current_rsp = (void*)regs.rsp;
         current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
         shortened_instruction=(unsigned short)current_instruction;
+        debug(i,debugged_pid);
         if (is_br_whitelisted(current_rip, ret_address,debugged_pid)) {
-            if (current_rip == ret_address) {
+            debug(1337,debugged_pid);
+            if (current_rip == ret_address) {  
             
                 if(current_rsp == rsp + 8) {// true = we're out
+                    //printf("Igot out\n");
                     ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
                     rip_decrease(debugged_pid);
                     return;
@@ -170,12 +174,16 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
             } else { // we're in -> MUST BE A SYSCALL
                     ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
                     waitpid(debugged_pid, &wait_status, 0);
+                    if ((WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
+                        return;
+                    }
                     handle_syscall(debugged_pid);
             }
         }
         ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
         waitpid(debugged_pid, &wait_status, 0);
     }
+    return;
 }
 
 
@@ -194,7 +202,13 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
         ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
         wait(&wait_status);
         if (!WIFEXITED(wait_status) && WIFSTOPPED(wait_status)) {
+            printf("Entered for the %dth time\n",i);
+            debug(i,debugged_pid);
             if(func_addr == getRip(debugged_pid)) {
+                //return_original_function(func_addr,debugged_pid,data);
+                ptrace(PTRACE_POKETEXT,debugged_pid,func_addr,data);
+                rip_decrease(debugged_pid);
+                //printf("target func addreess: %p", func_addr);
                 long ret_address = insert_breakpoint_at_ret_inst(func_addr, debugged_pid, &rsp, &data_ret);
                 track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret);
             }
@@ -206,23 +220,36 @@ int main(int argc, char *argv[])
 {
     const char *func_name = argv[1];
     const char *program_to_debug = argv[2];
+    char** argv_modified=(char**)malloc(argc*sizeof(char*)+1);
+    for (int i=2;i<argc;i++){
+        argv_modified[i-2]=argv[i];
+
+    }
+    argv_modified[argc] = (char*)NULL;
+    /*
+    printf("printing arguments:\n");
+    for( int i=0; i<argc-2;i++){
+        printf("arg %d is %s\n",i,argv_modified[i]);
+    }
+    */
     ParsedElf *parsed_elf = parse(program_to_debug, func_name);
     if (parsed_elf->found_symbol != 1)
     {
-        printf("PRF::not found!\n");
+        printf("PRF:: not found!\n");
         return 0;
     }
     if (get_func_bind_prop(parsed_elf) == STB_LOCAL)
     {
-        printf("PRF::local found!\n");
+        printf("PRF:: local found!\n");
         return 0;
     }
     if (get_func_bind_prop(parsed_elf) == STB_GLOBAL)
     {
-        pid_t debugged_pid = execute_program(program_to_debug);
+        pid_t debugged_pid = execute_program(program_to_debug,argv_modified);
         void *func_addr = parsed_elf->br_address;
         run_syscall_fix_debugger(debugged_pid, func_addr);
     }
     destroy(parsed_elf);
+    free(argv_modified);
     return 0;
 }

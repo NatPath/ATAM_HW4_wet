@@ -2,6 +2,7 @@
 #define _ELFPARSER_H
 #define STB_LOCAL 0
 #define STB_GLOBAL 1
+#define STT_FUNC 2
 #include <stdio.h>
 #include "elf64.h"
 
@@ -24,6 +25,7 @@ char *get_section_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Shdr *s
 char *get_symbol_name(ParsedElf *parsed, const char *path_to_elf, Elf64_Sym *symbol);
 void *get_func_adress(ParsedElf *parsed);
 int get_func_bind_prop(ParsedElf *parsed);
+int is_symbol_function(Elf64_Sym *symbol);
 void destroy(ParsedElf *parsedElf);
 
 #endif

@@ -175,6 +175,11 @@ int get_func_bind_prop(ParsedElf *parsed)
     return ELF64_ST_BIND(parsed->target_func->st_info);
 }
 
+int is_symbol_function(Elf64_Sym *symbol) {
+    return ELF64_ST_TYPE(symbol->st_info) == STT_FUNC;
+}
+
+
 void destroy(ParsedElf *parsed)
 {
     free(parsed->header);
