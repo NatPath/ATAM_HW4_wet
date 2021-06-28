@@ -26,6 +26,16 @@
 4    
 */
 
+void debug(int i, pid_t pid) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, pid,0,&regs);
+    long instr  = ptrace(PTRACE_PEEKTEXT, pid, regs.rip, 0);
+    printf("-----%d-----\n", i);
+    printf("RIP = %p\n", (void*)regs.rip);
+    printf("INSTRUCTION = 0x%lx\n", instr);
+    printf("RDI = 0x%llx\n", regs.rdi);
+} 
+
 pid_t execute_program(const char *exec_file,char* argv[])
 {
     int pid = fork();
@@ -112,18 +122,7 @@ void handle_syscall(pid_t debugged_pid){
     }
 }
 
-void debug(int i, pid_t pid) {
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, pid,0,&regs);
-    long instr  = ptrace(PTRACE_PEEKTEXT, pid, regs.rip, 0);
-    printf("-----%d-----\n", i);
-    printf("RIP = %p\n", (void*)regs.rip);
-    printf("INSTRUCTION = 0x%lx\n", instr);
-    printf("RDI = 0x%llx\n", regs.rdi);
-} 
-
-void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, void* rsp,long data,long data_ret){
-    int wait_status;
+void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, void* rsp,long data,long data_ret, int *wait_status){
     struct user_regs_struct regs;
     long current_instruction;// 8 bytes of the instruction
     unsigned short shortened_instruction;// only 2 bytes of the instruction
@@ -140,23 +139,18 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
     
 
     ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-    waitpid(debugged_pid, &wait_status, 0);
+    waitpid(debugged_pid, wait_status, 0);
     int i = 0;
-    while(WIFSTOPPED(wait_status) && !(WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
+    while(WIFSTOPPED(*wait_status) && !(WIFEXITED(*wait_status) || WIFSIGNALED(*wait_status))){
         i++;
-        //printf("entered the loop for the %dth time\n",i+1);
         ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
         current_rip = (void*)(regs.rip-1);
         current_rsp = (void*)regs.rsp;
         current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
         shortened_instruction=(unsigned short)current_instruction;
-        debug(i,debugged_pid);
         if (is_br_whitelisted(current_rip, ret_address,debugged_pid)) {
-            debug(1337,debugged_pid);
             if (current_rip == ret_address) {  
-            
                 if(current_rsp == rsp + 8) {// true = we're out
-                    //printf("Igot out\n");
                     ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
                     rip_decrease(debugged_pid);
                     return;
@@ -166,22 +160,22 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
                     rip_decrease(debugged_pid);
                     if(is_syscall((unsigned short)data_ret)){
                         ptrace(PTRACE_SINGLESTEP,debugged_pid,0,0);
-                        waitpid(debugged_pid, &wait_status, 0);
+                        waitpid(debugged_pid, wait_status, 0);
                         handle_syscall(debugged_pid);
                     }
                     ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_ret_trap);
                 }
             } else { // we're in -> MUST BE A SYSCALL
                     ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
-                    waitpid(debugged_pid, &wait_status, 0);
-                    if ((WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
+                    waitpid(debugged_pid, wait_status, 0);
+                    if ((WIFEXITED(*wait_status) || WIFSIGNALED(*wait_status))){
                         return;
                     }
                     handle_syscall(debugged_pid);
             }
         }
         ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
-        waitpid(debugged_pid, &wait_status, 0);
+        waitpid(debugged_pid, wait_status, 0);
     }
     return;
 }
@@ -202,15 +196,12 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
         ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
         wait(&wait_status);
         if (!WIFEXITED(wait_status) && WIFSTOPPED(wait_status)) {
-            printf("Entered for the %dth time\n",i);
-            debug(i,debugged_pid);
             if(func_addr == getRip(debugged_pid)) {
                 //return_original_function(func_addr,debugged_pid,data);
                 ptrace(PTRACE_POKETEXT,debugged_pid,func_addr,data);
                 rip_decrease(debugged_pid);
-                //printf("target func addreess: %p", func_addr);
                 long ret_address = insert_breakpoint_at_ret_inst(func_addr, debugged_pid, &rsp, &data_ret);
-                track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret);
+                track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret, &wait_status);
             }
         }  
     }
@@ -226,12 +217,6 @@ int main(int argc, char *argv[])
 
     }
     argv_modified[argc] = (char*)NULL;
-    /*
-    printf("printing arguments:\n");
-    for( int i=0; i<argc-2;i++){
-        printf("arg %d is %s\n",i,argv_modified[i]);
-    }
-    */
     ParsedElf *parsed_elf = parse(program_to_debug, func_name);
     if (parsed_elf->found_symbol != 1)
     {

@@ -36,6 +36,7 @@ void parse_elf_header(ParsedElf *parsedElf, const char *path_to_elf)
 
 void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
 {
+    char *name;
     int i = 0;
     Elf64_Shdr *text_header = malloc(sizeof(Elf64_Shdr));
     FILE *file = fopen(path_to_elf, "rb");
@@ -54,8 +55,9 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
             return;
         }
         i++;
-    } while (strcmp(get_section_name(parsedElf, path_to_elf, text_header), ".text") && i < parsedElf->header->e_shnum);
-
+        name = get_section_name(parsedElf, path_to_elf, text_header);
+    } while (strcmp(name, ".text") && i < parsedElf->header->e_shnum);
+    free(name);
     Elf64_Shdr *symtab_header = malloc(sizeof(Elf64_Shdr));
     fseek(file, (*parsedElf).header->e_shoff, SEEK_SET);
     i = 0;
@@ -68,8 +70,9 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
             return;
         }
         i++;
-    } while (strcmp(get_section_name(parsedElf, path_to_elf, symtab_header), ".symtab") && i < parsedElf->header->e_shnum);
-
+        name = get_section_name(parsedElf, path_to_elf, symtab_header);
+    } while (strcmp(name, ".symtab") && i < parsedElf->header->e_shnum);
+    free(name);
     Elf64_Shdr *string_header = malloc(sizeof(Elf64_Shdr));
     fseek(file, (*parsedElf).header->e_shoff, SEEK_SET);
     i = 0;
@@ -82,8 +85,9 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
             return;
         }
         i++;
-    } while (strcmp(get_section_name(parsedElf, path_to_elf, string_header), ".strtab") && i < parsedElf->header->e_shnum);
-
+        name = get_section_name(parsedElf, path_to_elf, string_header);
+    } while (strcmp(name, ".strtab") && i < parsedElf->header->e_shnum);
+    free(name);
     (*parsedElf).text_header = text_header;
     (*parsedElf).symtab_header = symtab_header;
     (*parsedElf).string_header = string_header;
@@ -92,6 +96,7 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
 
 void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const char *target_func_name)
 {
+    char *name;
     FILE *file = fopen(path_to_elf, "rb");
     if (file == NULL)
     {
@@ -111,13 +116,16 @@ void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const cha
             return;
         }
         i++;
-    } while (strcmp(get_symbol_name(parsedElf, path_to_elf, symbol), target_func_name) && i < num_of_symbols);
-
-    if (!strcmp(get_symbol_name(parsedElf, path_to_elf, symbol), target_func_name))
+        name = get_symbol_name(parsedElf, path_to_elf, symbol);
+    } while (strcmp(name, target_func_name) && i < num_of_symbols);
+    free(name);
+    name = get_symbol_name(parsedElf, path_to_elf, symbol);
+    if (!strcmp(name, target_func_name))
     {
         parsedElf->found_symbol = 1;
     }
     (*parsedElf).target_func = symbol;
+    free(name);
     fclose(file);
 }
 
