@@ -21,12 +21,14 @@ void parse_elf_header(ParsedElf *parsedElf, const char *path_to_elf)
     FILE *file = fopen(path_to_elf, "rb");
     if (file == NULL)
     {
+        exit(1);
         fprintf(stderr, "Failed opening the following file : '%s'\n", path_to_elf);
         return;
     }
     int read_res = fread(header, sizeof(Elf64_Ehdr), 1, file);
     if (read_res == 0)
     {
+        exit(1);
         fprintf(stderr, "Failed reading the header of the following file : '%s'\n", path_to_elf);
         return;
     }
@@ -42,6 +44,7 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
     FILE *file = fopen(path_to_elf, "rb");
     if (file == NULL)
     {
+        exit(1);
         fprintf(stderr, "Failed opening the following file : '%s'\n", path_to_elf);
         return;
     }
@@ -51,6 +54,7 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
         int read_res = fread(text_header, sizeof(Elf64_Ehdr), 1, file);
         if (read_res == 0)
         {
+            exit(1);
             fprintf(stderr, "Failed reading the header of the following file : '%s'\n", path_to_elf);
             return;
         }
@@ -66,6 +70,7 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
         int read_res = fread(symtab_header, sizeof(Elf64_Ehdr), 1, file);
         if (read_res == 0)
         {
+            exit(1);
             fprintf(stderr, "Failed reading the header of the following file : '%s'\n", path_to_elf);
             return;
         }
@@ -81,6 +86,7 @@ void parse_section_headers(ParsedElf *parsedElf, const char *path_to_elf)
         int read_res = fread(string_header, sizeof(Elf64_Ehdr), 1, file);
         if (read_res == 0)
         {
+            exit(1);
             fprintf(stderr, "Failed reading the header of the following file : '%s'\n", path_to_elf);
             return;
         }
@@ -100,6 +106,7 @@ void parse_symbol_entry(ParsedElf *parsedElf, const char *path_to_elf, const cha
     FILE *file = fopen(path_to_elf, "rb");
     if (file == NULL)
     {
+        exit(1);
         fprintf(stderr, "Failed opening the following file : '%s'\n", path_to_elf);
         return;
     }
