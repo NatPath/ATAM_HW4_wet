@@ -25,11 +25,24 @@
     3.2 make sure output is correct / no exepctions found
 4    
 */
+#define DO_SYS_RET( SYSCALL , RET_VALUE) do {\
+    RET_VALUE = SYSCALL ;\
+    if (RET_VALUE == -1){\
+        exit(1);\
+    }\
+}while(0)\
+
+#define DO_SYS( SYSCALL) do {\
+    if (SYSCALL == -1){\
+        exit(1);\
+    }\
+}while(0)\
 
 void debug(int i, pid_t pid) {
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, pid,0,&regs);
-    long instr  = ptrace(PTRACE_PEEKTEXT, pid, regs.rip, 0);
+    DO_SYS(ptrace(PTRACE_GETREGS, pid,0,&regs));
+    long instr ;
+    DO_SYS_RET(ptrace(PTRACE_PEEKTEXT, pid, regs.rip, 0),instr);
     printf("-----%d-----\n", i);
     printf("RIP = %p\n", (void*)regs.rip);
     printf("INSTRUCTION = 0x%lx\n", instr);
@@ -47,6 +60,7 @@ pid_t execute_program(const char *exec_file,char* argv[])
     { //child code
         if (ptrace(PTRACE_TRACEME, getpid(), NULL, NULL) < 0)
         {
+            exit(1);
             perror("ptrace");
             exit(1);
         }
@@ -54,6 +68,7 @@ pid_t execute_program(const char *exec_file,char* argv[])
     }
     else
     {
+        exit(1);
         perror("fork");
         exit(1);
     }
@@ -62,7 +77,7 @@ pid_t execute_program(const char *exec_file,char* argv[])
 void *getRip(pid_t debugged_pid)
 {
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
+    DO_SYS(ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs));
     return (void*)(regs.rip-1);
 }
 
@@ -72,19 +87,22 @@ unsigned long generate_br_INT_3(long data) {
 }
 
 void insert_breakpoint_at_target_function(void *func_addr, pid_t debugged_pid, long* data) {
-        *data = ptrace(PTRACE_PEEKTEXT, debugged_pid, func_addr, NULL);
+        //*data = ptrace(PTRACE_PEEKTEXT, debugged_pid, func_addr, NULL);
+        DO_SYS_RET(ptrace(PTRACE_PEEKTEXT, debugged_pid, func_addr, NULL),*data);
         unsigned long data_trap = generate_br_INT_3(*data);
-        ptrace(PTRACE_POKETEXT, debugged_pid, func_addr, (void *)data_trap);
+        DO_SYS(ptrace(PTRACE_POKETEXT, debugged_pid, func_addr, (void *)data_trap));
+        
 }
 
 long insert_breakpoint_at_ret_inst(void *func_addr, pid_t debugged_pid, void **rsp, long* data_ret) {
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
+    DO_SYS(ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs));
     *rsp = (void*)regs.rsp;
-    long return_to_rip = ptrace(PTRACE_PEEKDATA, debugged_pid, *rsp, NULL);
-    *data_ret = ptrace(PTRACE_PEEKTEXT, debugged_pid, return_to_rip, NULL);
+    long return_to_rip;
+    DO_SYS_RET(ptrace(PTRACE_PEEKDATA, debugged_pid, *rsp, NULL),return_to_rip);
+    DO_SYS_RET(ptrace(PTRACE_PEEKTEXT, debugged_pid, return_to_rip, NULL),*data_ret);
     unsigned long data_trap = generate_br_INT_3(*data_ret);
-    ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, (void *)data_trap);  
+    DO_SYS(ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, (void *)data_trap));
     return return_to_rip;  
 }
 // is inst a syscall
@@ -93,8 +111,9 @@ bool is_syscall(unsigned short inst){
 }
 bool was_the_last_instruction_syscall(pid_t pid){
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS,pid,0,&regs);
-    long instr= ptrace(PTRACE_PEEKDATA,pid,regs.rip-2,0);
+    DO_SYS(ptrace(PTRACE_GETREGS,pid,0,&regs));
+    long instr;
+    DO_SYS_RET(ptrace(PTRACE_PEEKDATA,pid,regs.rip-2,0),instr);
     return is_syscall((unsigned short)instr);
 }
 
@@ -105,16 +124,16 @@ bool is_br_whitelisted(void* rip, void* ret_address,pid_t pid) {
 
 void rip_decrease(pid_t debugged_pid){
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS,debugged_pid,0,&regs);
+    DO_SYS(ptrace(PTRACE_GETREGS,debugged_pid,0,&regs));
     regs.rip--;
-    ptrace(PTRACE_SETREGS,debugged_pid,0,&regs);
+    DO_SYS(ptrace(PTRACE_SETREGS,debugged_pid,0,&regs));
     
 }
 void handle_syscall(pid_t debugged_pid){
     long syscall_return_val;
     void* syscall_rip;
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, debugged_pid, 0, &regs);
+    DO_SYS(ptrace(PTRACE_GETREGS, debugged_pid, 0, &regs));
     syscall_return_val = regs.rax;
     syscall_rip = (void*)(regs.rip-2);
     if (syscall_return_val < 0) {
@@ -138,44 +157,45 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
 
     
 
-    ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-    waitpid(debugged_pid, wait_status, 0);
+    DO_SYS(ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL));
+    DO_SYS(waitpid(debugged_pid, wait_status, 0));
     int i = 0;
     while(WIFSTOPPED(*wait_status) && !(WIFEXITED(*wait_status) || WIFSIGNALED(*wait_status))){
         i++;
-        ptrace(PTRACE_GETREGS, debugged_pid,0,&regs);
+        DO_SYS(ptrace(PTRACE_GETREGS, debugged_pid,0,&regs));
         current_rip = (void*)(regs.rip-1);
         current_rsp = (void*)regs.rsp;
-        current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
+        //current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
+        DO_SYS_RET(ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0),current_instruction);
         shortened_instruction=(unsigned short)current_instruction;
         if (is_br_whitelisted(current_rip, ret_address,debugged_pid)) {
             if (current_rip == ret_address) {  
                 if(current_rsp == rsp + 8) {// true = we're out
-                    ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
+                    DO_SYS(ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret));
                     rip_decrease(debugged_pid);
                     return;
                 }
                 else { //we are in
-                    ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
+                    DO_SYS(ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret));
                     rip_decrease(debugged_pid);
                     if(is_syscall((unsigned short)data_ret)){
-                        ptrace(PTRACE_SINGLESTEP,debugged_pid,0,0);
-                        waitpid(debugged_pid, wait_status, 0);
+                        DO_SYS(ptrace(PTRACE_SINGLESTEP,debugged_pid,0,0));
+                        DO_SYS(waitpid(debugged_pid, wait_status, 0));
                         handle_syscall(debugged_pid);
                     }
-                    ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_ret_trap);
+                    DO_SYS(ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_ret_trap));
                 }
             } else { // we're in -> MUST BE A SYSCALL
-                    ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
-                    waitpid(debugged_pid, wait_status, 0);
+                    DO_SYS(ptrace(PTRACE_SYSCALL,debugged_pid,0,0));
+                    DO_SYS(waitpid(debugged_pid, wait_status, 0));
                     if ((WIFEXITED(*wait_status) || WIFSIGNALED(*wait_status))){
                         return;
                     }
                     handle_syscall(debugged_pid);
             }
         }
-        ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
-        waitpid(debugged_pid, wait_status, 0);
+        DO_SYS(ptrace(PTRACE_SYSCALL,debugged_pid,0,0));
+        DO_SYS(waitpid(debugged_pid, wait_status, 0));
     }
     return;
 }
@@ -189,16 +209,16 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
     long data_ret; // backup of the next command after func call (overwritten by int 3)
     int i=0;
 
-    waitpid(debugged_pid, &wait_status, 0);
+    DO_SYS(waitpid(debugged_pid, &wait_status, 0));
     while(WIFSTOPPED(wait_status) && !(WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
         i++;
         insert_breakpoint_at_target_function(func_addr, debugged_pid, &data);
-        ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
-        wait(&wait_status);
+        DO_SYS(ptrace(PTRACE_CONT, debugged_pid, NULL, NULL));
+        DO_SYS(wait(&wait_status));
         if (!WIFEXITED(wait_status) && WIFSTOPPED(wait_status)) {
             if(func_addr == getRip(debugged_pid)) {
                 //return_original_function(func_addr,debugged_pid,data);
-                ptrace(PTRACE_POKETEXT,debugged_pid,func_addr,data);
+                DO_SYS(ptrace(PTRACE_POKETEXT,debugged_pid,func_addr,data));
                 rip_decrease(debugged_pid);
                 long ret_address = insert_breakpoint_at_ret_inst(func_addr, debugged_pid, &rsp, &data_ret);
                 track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret, &wait_status);
