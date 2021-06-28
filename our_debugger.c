@@ -149,14 +149,12 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
         current_rsp = (void*)regs.rsp;
         current_instruction = ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip-1,0);
         shortened_instruction=(unsigned short)current_instruction;
-        debug(i,debugged_pid);
         if (is_br_whitelisted(current_rip, ret_address,debugged_pid)) {
-            printf("iteration %d got into whitelisted\n",i);
             if (current_rip == ret_address) {
             
                 if(current_rsp == rsp + 8) {// true = we're out
-                    printf("do you ever get here?\n"); 
                     ptrace(PTRACE_POKETEXT, debugged_pid,ret_address,(void*)data_ret);
+                    rip_decrease(debugged_pid);
                     return;
                 }
                 else { //we are in
@@ -170,11 +168,6 @@ void track_syscalls(pid_t debugged_pid, void* func_address, void* ret_address, v
                     ptrace(PTRACE_POKETEXT, debugged_pid, ret_address, (void*)data_ret_trap);
                 }
             } else { // we're in -> MUST BE A SYSCALL
-                    if (!was_the_last_instruction_syscall(debugged_pid)){
-                        //sanity check
-                        printf("if you got here you fucked up\n");
-                    }
-                    //1. exec instr
                     ptrace(PTRACE_SYSCALL,debugged_pid,0,0);
                     waitpid(debugged_pid, &wait_status, 0);
                     handle_syscall(debugged_pid);
@@ -196,176 +189,18 @@ void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
 
     waitpid(debugged_pid, &wait_status, 0);
     while(WIFSTOPPED(wait_status) && !(WIFEXITED(wait_status) || WIFSIGNALED(wait_status))){
-        printf("IS EXITED %d\n", WIFEXITED(wait_status));
         i++;
         insert_breakpoint_at_target_function(func_addr, debugged_pid, &data);
         ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
-        //int wait_ret_value=waitpid(debugged_pid, &wait_status, 0);
-        /*
-        printf("wait_ret_value is %d",wait_ret_value);
-        if( wait_ret_value<0){
-            printf("OUT\n");
-            break;
-        }
-        */
         wait(&wait_status);
-        if (WIFEXITED(wait_status)){
-            printf("SHALOM AL ISRAEL");
-            break;
-        }
         if (!WIFEXITED(wait_status) && WIFSTOPPED(wait_status)) {
-            debug(1337,debugged_pid);
-            printf("how many loops! this many loops %d\n",i);
             if(func_addr == getRip(debugged_pid)) {
-                printf("Entered the function\n");
                 long ret_address = insert_breakpoint_at_ret_inst(func_addr, debugged_pid, &rsp, &data_ret);
-                printf("HERE IS YOUR MOTHEFUCKING ORIGNIAL RSP: 0x%p\n", rsp);
                 track_syscalls(debugged_pid, func_addr, (void*)ret_address, rsp, data, data_ret);
             }
         }  
     }
 }
-
-/*
-void run_syscall_fix_debugger(pid_t debugged_pid, void *func_addr)
-{
-    int wait_status;
-    struct user_regs_struct regs;
-    void *rsp;
-    long current_instruction;
-    void* current_rip;
-    long data; // backup of the first command of func (overwritten by int 3)
-    long data_ret; // backup of the next command after func call (overwritten by int 3)
-    unsigned long data_trap; // a mask for injecting int 3 into a command
-    long return_to_rip; // the rip of the next command after func call
-    unsigned short instruction_shortened;
-
-    waitpid(debugged_pid, &wait_status, 0);
-    while (WIFSTOPPED(wait_status))
-    {
-        // backup original first command of func
-        data = ptrace(PTRACE_PEEKTEXT, debugged_pid, func_addr, NULL);
-
-        // writes the break point (injects int 3 in the func_addr)
-        data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-        ptrace(PTRACE_POKETEXT, debugged_pid, func_addr, (void *)data_trap);
-        
-
-        ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
-        waitpid(debugged_pid, &wait_status, 0);
-        if (WIFSTOPPED(wait_status))
-        {
-            current_rip = getRip(debugged_pid);
-            printf("--First stop of traced--\n");
-            printf("rip is: %p\n",current_rip);
-            printf("func_addr is %p\n",func_addr);
-            printf("\n");
-            if (current_rip == func_addr)
-            { // entered the function
-                //return the original command of the breakpoint
-                //make a breakpoint in the return address
-                ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
-                rsp = (void*)regs.rsp;
-                return_to_rip = ptrace(PTRACE_PEEKDATA, debugged_pid, rsp, NULL);
-                data_ret = ptrace(PTRACE_PEEKTEXT, debugged_pid, return_to_rip, NULL);
-                data_trap = (data_ret & 0xFFFFFFFFFFFFFF00) | 0xCC;
-                ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, (void *)data_trap);
-
-
-                ptrace(PTRACE_POKETEXT, debugged_pid, func_addr, data);
-                // sets rip 1 byte backwards
-                regs.rip-=1;
-                ptrace(PTRACE_SETREGS,debugged_pid,0,regs);
-                ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                waitpid(debugged_pid, &wait_status, 0);
-                while (WIFSTOPPED(wait_status))
-                {
-                    //check where we stopped
-                    ptrace(PTRACE_GETREGS, debugged_pid, NULL, &regs);
-                    current_rip = getRip(debugged_pid);
-                    printf("rip is now : %p\n",current_rip);
-                    current_instruction = ptrace(PTRACE_PEEKDATA, debugged_pid, current_rip,NULL);
-                    instruction_shortened= (unsigned short)current_instruction;
-                    printf("the byte in rip is: %hhx\n" ,instruction_shortened);
-                    printf("instruction shortened is : %c\n",instruction_shortened);
-                    //current_instruction= ptrace(PTRACE_PEEKTEXT, debugged_pid, regs.rip, NULL);
-                    printf("rip is now : %0llx\n",regs.rip);
-                    printf("inst is : %0x\n", (short)current_instruction);
-                    if (current_rip == (void*)return_to_rip)
-                    {
-                        printf("You stopped at return_to_rip!\n");
-                        if (instruction_shortened==0xcc ){
-                            //meaning we stopped because of int 3 that we have planted
-                            printf("You stopped at 0xcc\n");
-                            //put back the original command
-                            regs.rip--;
-                            ptrace(PTRACE_SETFPREGS,debugged_pid,0,regs);
-                            ptrace(PTRACE_POKETEXT,debugged_pid,return_to_rip,data_ret);
-                        }
-                        //check if we're just out of the function
-                        ptrace(PTRACE_GETREGS, debugged_pid,NULL,&regs);
-                        if (rsp==(void*)(regs.rsp-8)){
-                            printf("It means you're really out of the function, HURRAY\n");
-                            break;
-                        }
-                        else{ //we landed on return_to_rip but havn't gotten out of the function yet 
-                            printf("we landed on return_to_rip but havn't gotten out of the function yet\n");
-                            // current_instruction =ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_ret);
-                            printf("lets see whats going on:\n");
-                            printf("instruction shortend is : %c\n",instruction_shortened );
-                            if (instruction_shortened==0x05cc){
-                                printf("this is syscall!!\n");
-                            }
-                            ptrace(PTRACE_SINGLESTEP, debugged_pid, NULL, NULL);
-                            ptrace(PTRACE_POKETEXT, debugged_pid, return_to_rip, data_trap);
-                            ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                            waitpid(debugged_pid,&wait_status,0);
-                            continue;
-                        }
-                                                
-                    }
-                    if (current_instruction == SYSCALL_OPCODE)
-                    {
-                        // stopped at syscall
-                        void* syscall_rip = getRip(debugged_pid);
-                        ptrace(PTRACE_SINGLESTEP, debugged_pid, 0, 0); //do the syscall
-
-                        ptrace(PTRACE_GETREGS, debugged_pid, 0, &regs);
-                        unsigned long long int syscall_return_val = regs.rax;
-                        printf("PRF::syscall in %p returned with %llu\n", syscall_rip, syscall_return_val);
-
-                        ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                        waitpid(debugged_pid, &wait_status, 0);
-                        continue;
-                    }
-                    if (getRip(debugged_pid) == func_addr)
-                    {
-                        //stopped at the beginning of func for some reason (probably recursion)
-                        //just continue to the next syscall i guess?
-                        ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                        waitpid(debugged_pid, &wait_status, NULL);
-                        continue;
-                    }
-                    else
-                    {
-                        //stopped for other unknown reason. might be a user breakpoint or some interupt
-                        ptrace(PTRACE_SYSCALL, debugged_pid, NULL, NULL);
-                        waitpid(debugged_pid, &wait_status, 0);
-                    }
-                }
-            }
-            else
-            { //another breakpoint
-                ptrace(PTRACE_CONT, debugged_pid, NULL, NULL);
-                waitpid(debugged_pid, &wait_status, 0);
-            }
-        }
-    }
-}
-
-*/
-
-
 
 int main(int argc, char *argv[])
 {
